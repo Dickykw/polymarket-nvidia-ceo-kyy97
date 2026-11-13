@@ -6,7 +6,7 @@ Approach
 For each market, we estimate a per-market volatility sigma from the most recent
 120 minutes of 1-minute price changes.  The estimate is the average of two
 robust measures: (median absolute change / 0.6745) and the standard deviation
-of changes, floored at 0.0005 and capped at 0.005.  This adapts to the huge
+of changes, floored at 0.0003 and capped at 0.004.  This adapts to the huge
 variation in volatility across markets (some trade at 0.0000 mean absolute
 change, others at 0.0075+).
 
@@ -31,8 +31,18 @@ house baseline 0.3985 on every case.
 import json
 import math
 import os
+from statistics import NormalDist
 
-Z = [-1.644854, -0.67449, 0.0, 0.67449, 1.644854]  # z-scores for quantiles
+TAUS = [0.05, 0.25, 0.5, 0.75, 0.95]  # quantile targets
+_NORM = NormalDist()  # cached standard normal
+
+
+def t_quantile(tau, df=5):
+    """Cornish-Fisher approximation of Student-t quantile with df degrees of freedom."""
+    z = _NORM.inv_cdf(tau)
+    # Cornish-Fisher expansion for Student-t
+    t = z * (1 + (z * z + 1) / (4 * df)) * math.sqrt((df - 2) / df)
+    return t
 
 
 def estimate_sigma(prices, window=120):
@@ -53,7 +63,7 @@ def estimate_sigma(prices, window=120):
     var = sum((x - mean) ** 2 for x in recent) / n
     sigma_std = math.sqrt(var)
     # Average the two, floor and cap
-    sigma = max(0.0005, min(0.005, (sigma_mad + sigma_std) / 2.0))
+    sigma = max(0.0003, min(0.004, (sigma_mad + sigma_std) / 2.0))
     return sigma
 
 
@@ -72,8 +82,8 @@ def forecast_market(prices, horizon):
     sigma = estimate_sigma(prices)
     rows = []
     for h in range(1, horizon + 1):
-        sh = sigma * math.sqrt(h)
-        row = [price6(last_price + z * sh) for z in Z]
+        sh = sigma * (h ** 0.54)
+        row = [price6(last_price + t_quantile(tau) * sh) for tau in TAUS]
         # Enforce non-decreasing
         for j in range(1, 5):
             if row[j] < row[j - 1]:
